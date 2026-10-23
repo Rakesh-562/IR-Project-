@@ -1,0 +1,5 @@
+httpx
+beautifulsoup4
+rank-bm25
+anthropic
+python-dotenv
