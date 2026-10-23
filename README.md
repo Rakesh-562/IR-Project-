@@ -117,12 +117,3 @@ Ranked Results
 | EXCERPT_WORDS    | relevance_filter.py | 400 | Words sent to LLM per doc          |
 | MODEL            | relevance_filter.py | claude-haiku-4-5 | LLM model used     |
 | SCRAPE_DELAY     | legal_scraper.py | 0.8s | Polite delay between requests        |
-
-## For Your IR Project Report
-
-The auto-relevance labels can be validated by:
-1. Manually labeling ~50 doc-query pairs from your scraped results
-2. Comparing against LLM labels → compute Precision, Recall, F1
-3. Use Cohen's Kappa to measure agreement (target κ > 0.6)
-
-This validates the LLM as a reliable replacement for manual annotation.
