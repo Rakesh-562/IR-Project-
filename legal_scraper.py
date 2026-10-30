@@ -1,31 +1,23 @@
-"""
-legal_scraper.py  (v2 — fully free, no paid APIs)
---------------------------------------------------
-Sources used:
-  1. Indian Kanoon website  — direct scrape (free, no API key)
-  2. India Code             — direct scrape (free government site)
-  3. Brave Search API       — free tier, 2000 queries/month, NO credit card
-  4. Tavily Search API      — free tier, 1000 queries/month, NO credit card
-
-Get your free keys (5 min total):
-  Brave  → https://api.search.brave.com/app/keys   (sign up, copy key)
-  Tavily → https://app.tavily.com                  (sign up, copy key)
-
-Both are genuinely free with no card required.
-
-Usage:
-    docs = asyncio.run(scrape(query, brave_api_key="...", tavily_api_key="..."))
-"""
+"""Retrieve Indian legal documents from public web sources."""
 
 import asyncio
 import re
-import time
+from dataclasses import dataclass
 from urllib.parse import quote_plus, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 
-from relevance_filter import ScrapedDoc
+
+@dataclass
+class ScrapedDoc:
+    """One document retrieved by a legal source."""
+    doc_id: str
+    title: str
+    content: str
+    url: str = ""
+    source: str = ""
+    provider: str = ""
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -46,13 +38,12 @@ SCRAPE_DELAY   = 1.0    # polite delay between requests to same host
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _clean(text: str) -> str:
-    text = re.sub(r"\s+", " ", text)
     text = re.sub(
-        r"(cookie policy|privacy policy|terms of use|all rights reserved"
-        r"|subscribe|advertisement|login|sign up)[^\n]*",
-        "", text, flags=re.IGNORECASE
+        r"\b(cookie policy|privacy policy|terms of use|all rights reserved"
+        r"|subscribe|advertisement|login|sign up)\b",
+        " ", text, flags=re.IGNORECASE
     )
-    return text.strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 def _truncate(text: str, max_words: int = MAX_WORDS) -> str:
     words = text.split()
@@ -80,6 +71,31 @@ def _parse(html: str, selector: str | None = None) -> str:
     node = soup.select_one(selector) if selector else None
     src  = node or soup.find("body")
     return _clean(src.get_text(separator=" ")) if src else ""
+
+
+def _tavily_content(raw_content: str, summary: str, title: str) -> str:
+    if not raw_content:
+        return summary
+
+    content = raw_content
+    heading = re.search(
+        rf"(?im)^\s*#+\s*{re.escape(title)}\s*$",
+        content,
+    ) if title else None
+    if heading:
+        content = content[heading.start():]
+
+    opening = content[:1500].lower()
+    link_count = len(re.findall(r"\]\s*\(", opening))
+    if (
+        "skip to main content" in opening
+        or "main navigation" in opening
+        or "mobile navigation" in opening
+        or link_count >= 4
+    ):
+        content = summary or content
+
+    return content
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -133,22 +149,18 @@ async def scrape_indiankanoon(
         if not doc_html:
             continue
 
-        # Main judgment text is inside <div id="judgments"> on IK pages
-        content = _parse(doc_html, selector="#judgments")
-        if not content:
-            content = _parse(doc_html)           # fallback: whole body
+        content = _parse(doc_html, selector=".judgments")
         if not content or len(content) < 100:
+            print(f"  [indiankanoon] no judgment text found at {full_url}")
             continue
-
-        # Try to extract court name from the result snippet
-        source = "indiankanoon.org"
 
         docs.append(ScrapedDoc(
             doc_id  = f"ik_{abs(hash(full_url))}",
             title   = title,
             content = _truncate(content),
             url     = full_url,
-            source  = source,
+            source  = "indiankanoon.org",
+            provider = "Indian Kanoon",
         ))
         print(f"  [indiankanoon] ✓ {title[:65]}")
 
@@ -156,147 +168,88 @@ async def scrape_indiankanoon(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Source 2 — India Code  (FREE — official government site)
-# https://www.indiacode.nic.in  — central acts and statutes
+# Source 2 — India Code public search API
 # ══════════════════════════════════════════════════════════════════════════════
 
-IC_SEARCH = ("https://www.indiacode.nic.in/handle/123456789/1362/simple-search"
-             "?query={query}&rpp={n}&sort_by=score&order=desc")
+IC_BASE = "https://indiacode.gov.in"
+IC_SEARCH = f"{IC_BASE}/server/api/discover/search/objects"
+
+
+def _metadata_text(values: list[dict]) -> str:
+    parts = [
+        BeautifulSoup(str(item.get("value", "")), "html.parser").get_text(" ", strip=True)
+        for item in values
+    ]
+    return " ".join(part for part in parts if part)
 
 async def scrape_indiacode(
     query: str,
     client: httpx.AsyncClient,
     max_results: int = 3,
 ) -> list[ScrapedDoc]:
-    """Scrape India Code for Acts and statutes — fully free."""
-    url  = IC_SEARCH.format(query=quote_plus(query), n=max_results)
-    html = await _fetch(url, client)
-    if not html:
+    """Search India Code's public DSpace API for Acts, sections, and statutes."""
+    try:
+        response = await client.get(
+            IC_SEARCH,
+            params={"query": query, "size": max_results, "page": 0},
+            headers={"Accept": "application/json"},
+            timeout=FETCH_TIMEOUT,
+        )
+        response.raise_for_status()
+        search_data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        print(f"  [indiacode] search API failed: {type(exc).__name__}: {exc}")
         return []
 
-    soup  = BeautifulSoup(html, "html.parser")
-    links = soup.select("div.artifact-title a")[:max_results]
-    docs  = []
+    search_result = (
+        search_data.get("_embedded", {})
+        .get("searchResult", {})
+        .get("_embedded", {})
+    )
+    objects = search_result.get("objects", [])
+    if not objects:
+        print(f"  [indiacode] no results for query: {query}")
+        return []
 
-    for link in links:
-        title    = link.get_text(strip=True)
-        href     = link.get("href", "")
-        if not href or len(title) < 5:
+    docs: list[ScrapedDoc] = []
+    for result in objects[:max_results]:
+        item = result.get("_embedded", {}).get("indexableObject", {})
+        metadata = item.get("metadata", {})
+
+        title = _metadata_text(metadata.get("dc.title", [])) or item.get("name", "")
+        if not title:
             continue
-        full_url = urljoin("https://www.indiacode.nic.in", href)
 
-        await asyncio.sleep(SCRAPE_DELAY)
-        doc_html = await _fetch(full_url, client)
-        content  = _parse(doc_html, "div.item-page") if doc_html else ""
-        if not content:
+        content_parts = [
+            title,
+            _metadata_text(metadata.get("dc.identifier.act_name", [])),
+            _metadata_text(metadata.get("dc.identifier.act_year", [])),
+            _metadata_text(metadata.get("dc.identifier.section_number", [])),
+            _metadata_text(metadata.get("dc.identifier.section_page_note", [])),
+            _metadata_text(metadata.get("dc.description", [])),
+            _metadata_text(metadata.get("dc.description.abstract", [])),
+        ]
+        content = _clean(" ".join(part for part in content_parts if part))
+        handle = item.get("handle", "")
+        if not handle or not content:
+            print(f"  [indiacode] incomplete search result skipped: {title[:65]}")
             continue
-
+        full_url = urljoin(f"{IC_BASE}/", f"handle/{handle}")
         docs.append(ScrapedDoc(
-            doc_id  = f"ic_{abs(hash(full_url))}",
+            doc_id  = f"ic_{item.get('uuid') or item.get('id') or abs(hash(full_url))}",
             title   = title,
             content = _truncate(content),
             url     = full_url,
-            source  = "indiacode.nic.in",
+            source  = "indiacode.gov.in",
+            provider = "India Code",
         ))
         print(f"  [indiacode]    ✓ {title[:65]}")
 
     return docs
 
 
-# # ══════════════════════════════════════════════════════════════════════════════
-# # Source 3 — Brave Search API  (FREE — 2000 queries/month, NO credit card)
-# # Sign up: https://api.search.brave.com/app/keys
-# # Returns web results + snippets; we then fetch each page for full content.
-# # ══════════════════════════════════════════════════════════════════════════════
-
-# BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
-
-# # Legal sites to restrict results to (passed as site: operators in query)
-# LEGAL_SITE_FILTER = (
-#     "site:indiankanoon.org OR site:indiacode.nic.in OR "
-#     "site:legalserviceindia.com OR site:main.sci.gov.in OR "
-#     "site:judis.nic.in OR site:bareactslive.com OR "
-#     "site:manupatra.com OR site:scconline.com"
-# )
-
-# async def scrape_brave(
-#     query: str,
-#     client: httpx.AsyncClient,
-#     api_key: str,
-#     max_results: int = 5,
-# ) -> list[ScrapedDoc]:
-#     """
-#     Brave Search API — completely free, 2000 queries/month.
-#     Get your free key at: https://api.search.brave.com/app/keys
-#     (No credit card required)
-#     """
-#     if not api_key:
-#         print("  [brave] no API key — skipping. "
-#               "Get one FREE (no card) at https://api.search.brave.com/app/keys")
-#         return []
-
-#     # Append legal site filter so results are from trusted legal sources
-#     full_query = f"{query} Indian law ({LEGAL_SITE_FILTER})"
-
-#     headers = {
-#         **HEADERS,
-#         "Accept": "application/json",
-#         "Accept-Encoding": "gzip",
-#         "X-Subscription-Token": api_key,
-#     }
-#     params = {
-#         "q":     full_query,
-#         "count": min(max_results, 20),
-#         "safesearch": "off",
-#         "country": "IN",
-#         "search_lang": "en",
-#     }
-
-#     try:
-#         r = await client.get(BRAVE_SEARCH_URL, headers=headers,
-#                              params=params, timeout=FETCH_TIMEOUT)
-#         r.raise_for_status()
-#         web_results = r.json().get("web", {}).get("results", [])
-#     except Exception as e:
-#         print(f"  [brave] API error: {e}")
-#         return []
-
-#     docs = []
-#     for item in web_results[:max_results]:
-#         title    = item.get("title", "")
-#         page_url = item.get("url", "")
-#         snippet  = item.get("description", "")
-#         source   = item.get("profile", {}).get("long_name", "") or \
-#                    item.get("meta_url", {}).get("hostname", "")
-
-#         if not page_url:
-#             continue
-
-#         await asyncio.sleep(SCRAPE_DELAY)
-#         doc_html = await _fetch(page_url, client)
-#         content  = _parse(doc_html) if doc_html else snippet
-#         if not content:
-#             content = snippet
-#         if len(content) < 80:
-#             continue
-
-#         docs.append(ScrapedDoc(
-#             doc_id  = f"brave_{abs(hash(page_url))}",
-#             title   = title,
-#             content = _truncate(content),
-#             url     = page_url,
-#             source  = source,
-#         ))
-#         print(f"  [brave]        ✓ {title[:65]}")
-
-#     return docs
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-# Source 4 — Tavily Search API  (FREE — 1000 queries/month, NO credit card)
-# Sign up: https://app.tavily.com
-# Designed for AI/research use — returns clean extracted content automatically.
-# Best feature: returns full page content without needing a second fetch step.
+# Source 3 — Tavily Search API
 # ══════════════════════════════════════════════════════════════════════════════
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
@@ -307,16 +260,9 @@ async def scrape_tavily(
     api_key: str,
     max_results: int = 5,
 ) -> list[ScrapedDoc]:
-    """
-    Tavily Search API — free tier 1000 queries/month, no card.
-    Get your key at: https://app.tavily.com
-
-    Best for this project: Tavily returns pre-extracted clean text
-    from each page, so no second fetch needed.
-    """
+    """Fetch search results and extracted page content from Tavily."""
     if not api_key:
-        print("  [tavily] no API key — skipping. "
-              "Get one FREE at https://app.tavily.com")
+        print("  [tavily] no API key — skipping.")
         return []
 
     payload = {
@@ -327,7 +273,11 @@ async def scrape_tavily(
         "max_results":          max_results,
         "include_domains": [
             "indiankanoon.org",
-            "indiacode.nic.in",
+            "indiacode.gov.in",
+            "api.sci.gov.in",
+            "sci.gov.in",
+            "ecourts.gov.in",
+            "egazette.gov.in",
             "legalserviceindia.com",
             "main.sci.gov.in",
             "judis.nic.in",
@@ -349,8 +299,11 @@ async def scrape_tavily(
     for item in results[:max_results]:
         title    = item.get("title", "")
         page_url = item.get("url", "")
-        # Tavily returns raw_content (full page text) when include_raw_content=True
-        content  = item.get("raw_content") or item.get("content", "")
+        content = _tavily_content(
+            item.get("raw_content", ""),
+            item.get("content", ""),
+            title,
+        )
         source   = re.sub(r"https?://(www\.)?", "", page_url).split("/")[0]
 
         if not content or not page_url:
@@ -362,6 +315,7 @@ async def scrape_tavily(
             content = _truncate(_clean(content)),
             url     = page_url,
             source  = source,
+            provider = "Tavily",
         ))
         print(f"  [tavily]       ✓ {title[:65]}")
 
@@ -375,29 +329,12 @@ async def scrape_tavily(
 async def scrape(
     query: str,
     max_per_source: int = 5,
-    brave_api_key: str  = "",
     tavily_api_key: str = "",
 ) -> list[ScrapedDoc]:
-    """
-    Scrape all sources for the query. Returns combined, deduplicated ScrapedDocs.
-
-    Minimum setup (zero cost):
-        - No keys at all → only Indian Kanoon + India Code scraped (still useful!)
-
-    Recommended free setup (5 min, no card):
-        - brave_api_key  from https://api.search.brave.com/app/keys
-        - tavily_api_key from https://app.tavily.com
-
-    Args:
-        query          : the user's legal search query
-        max_per_source : how many docs to pull from each source
-        brave_api_key  : Brave Search free API key
-        tavily_api_key : Tavily Search free API key
-    """
+    """Scrape configured sources and return documents deduplicated by URL."""
     print(f"\n{'─'*68}")
     print(f"[scraper] Query      : {query}")
-    print(f"[scraper] Sources    : IndianKanoon + IndiaCode"
-          + (" + Brave" if brave_api_key else "")
+    print(f"[scraper] Sources    : Indian Kanoon + India Code"
           + (" + Tavily" if tavily_api_key else ""))
     print(f"{'─'*68}\n")
 
@@ -405,7 +342,6 @@ async def scrape(
         batches = await asyncio.gather(
             scrape_indiankanoon(query, client, max_per_source),
             scrape_indiacode(query, client, max(1, max_per_source // 2)),
-            # scrape_brave(query, client, brave_api_key, max_per_source),
             scrape_tavily(query, client, tavily_api_key, max_per_source),
             return_exceptions=True,
         )

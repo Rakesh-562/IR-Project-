@@ -23,6 +23,7 @@ from typing import Literal
 
 import httpx
 from rank_bm25 import BM25Okapi  # pip install rank-bm25
+from legal_scraper import ScrapedDoc
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -35,16 +36,6 @@ BM25_TOP_N = 25                     # pre-filter: only top-N go to LLM
 MAX_CONCURRENT = 8                  # parallel LLM calls at once
 
 # ── Data classes ─────────────────────────────────────────────────────────────
-
-@dataclass
-class ScrapedDoc:
-    """One document retrieved from the web scraper."""
-    doc_id: str
-    title: str
-    content: str                    # full text
-    url: str = ""
-    source: str = ""                # e.g. "indiankanoon.org", "legalserviceindia.com"
-
 
 @dataclass
 class LabeledDoc:

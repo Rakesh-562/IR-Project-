@@ -1,119 +1,70 @@
-# Legal IR Pipeline — Setup & Run Guide
+# Legal IR Pipeline
 
-## File Structure
+This command-line project searches for Indian legal documents, retrieves a limited
+number of pages from configured sources, and ranks every retrieved document using
+local BM25 keyword matching. It does not use an LLM relevance filter.
 
-```
-relevance_filter.py   ← LLM relevance judge (already built)
-legal_scraper.py      ← scrapes real legal sites
-pipeline.py           ← connects everything, shows final results
-README.md             ← this file
-```
+## What it retrieves
 
-## Install Dependencies
+- **Court judgments / case law:** Indian Kanoon search results (direct scraping).
+- **Acts and statutes:** India Code's public search API.
+- **Additional web results:** Tavily, if `TAVILY_API_KEY` is configured. Tavily is
+  optional and its API terms and limits may change.
 
-```bash
-pip install -r requirements.txt
-```
+The project does not currently crawl complete legal archives. Results are limited
+to what each source returns for a query and the per-source limits in `pipeline.py`.
+It does not specifically search for academic or educational "case studies"; it
+focuses on legal texts such as judgments and legislation.
 
-## API Keys You Need
+## Other free sources to consider
 
-### Tavily (optional search provider)
-- Get a key at https://app.tavily.com
-- The scraper loads `TAVILY_API_KEY` from the project `.env` file.
+These are useful official sources. India Code is searched directly; when Tavily
+is configured its search can also return pages from these domains:
 
-### Anthropic (optional LLM relevance judgments)
-- Set `ANTHROPIC_API_KEY` in `.env` if you want LLM-based relevance judgments.
-- Without it, the pipeline uses its local BM25 ranking and makes no paid API calls.
+- [Supreme Court of India](https://www.sci.gov.in/) — official court judgments.
+- [eCourts Services](https://ecourts.gov.in/) — court services and case-related
+  information, including lower-court material.
+- [eGazette of India](https://egazette.gov.in/) — official Gazette notifications.
 
-## Set Your Keys
+Their websites may change, impose access limits, or publish documents in formats
+such as PDF. Before automating collection, check the site's terms and access
+policies; scraping every record is not guaranteed by a search-page scraper.
 
-Option A — create a `.env` file in the project folder (recommended):
-```dotenv
-TAVILY_API_KEY=your_tavily_key_here
-# Optional: enables LLM relevance judgments
-# ANTHROPIC_API_KEY=your_anthropic_key_here
-```
+## Install and run
 
-The pipeline loads `.env` automatically. Direct Indian Kanoon and India Code
-scraping does not require API keys. BM25 fallback also runs locally without an
-Anthropic key. Do not commit `.env` or share its contents.
-
-Option B — environment variables:
 ```powershell
-$env:TAVILY_API_KEY="your_tavily_key_here"
-# Optional for LLM relevance judgments:
-# $env:ANTHROPIC_API_KEY="your_anthropic_key_here"
-```
-
-## Run
-
-```bash
-# As CLI
+pip install -r requirements.txt
 python pipeline.py "right to privacy Article 21 India"
-
-# Or interactive
-python pipeline.py
-# Enter legal search query: bail conditions under CrPC section 437
-
-# More examples
-python pipeline.py "fundamental rights violation police custody"
-python pipeline.py "property rights women Hindu Succession Act"
-python pipeline.py "RTI application rejection appeal procedure"
 ```
 
-## What the Output Looks Like
+Run `python pipeline.py` without a query to be prompted interactively.
 
-```
-════════════════════════════════════════════════════════════════════════
-  LEGAL SEARCH RESULTS
-  Query : right to privacy Article 21 India
-════════════════════════════════════════════════════════════════════════
+The direct Indian Kanoon and India Code scrapers, and BM25 ranking, need no API
+keys. To enable Tavily results, set `TAVILY_API_KEY` in a `.env` file in the
+project folder or as an environment variable. Do not commit or share `.env`.
 
-  Filter summary: 18 scraped  →  8 relevant  |  4 partial  |  6 discarded
+## How it works
 
-────────────────────────────────────────────────────────────────────────
-  [1]  ✓ RELEVANT   BM25: 4.821
-  Justice K.S. Puttaswamy v. Union of India
-  https://indiankanoon.org/doc/127517806/
-  Source : indiankanoon.org
-  Reason : Landmark Supreme Court judgment establishing right to
-           privacy as a fundamental right under Article 21.
-  Preview: The nine-judge bench unanimously held that the right to
-           privacy is a fundamental right protected under Article 21 ...
+```text
+Query
+  → Indian Kanoon judgments + India Code legislation (public DSpace search API)
+  → optional Tavily results
+  → deduplicate retrieved URLs
+  → BM25-rank every retrieved document
+  → print the top 10
 ```
 
-## How It Works (Architecture)
+All retrieved documents are ranked and returned by `run_pipeline`; only the top
+10 are printed by default. The output shows each provider's retrieved count,
+top-10 count, and best rank, so you can tell whether a source returned documents
+that ranked below the display limit. Change `MAX_FINAL` in `pipeline.py` to print
+more.
 
-```
-User Query
-    │
-    ▼
-legal_scraper.py
-    ├── Indian Kanoon website ── court judgments
-    ├── India Code website ───── statutes & acts
-    └── Tavily Search API ────── optional search results
-    │
-    ▼ (all scraped docs as ScrapedDoc objects)
-    │
-relevance_filter.py
-    ├── BM25 pre-filter    ──── top-25 candidates only
-    └── LLM judge (Claude) ──── relevant / partial / not_relevant
-    │
-    ▼ (only relevant + partial pass through)
-    │
-pipeline.py → BM25 ranker
-    │
-    ▼
-Ranked Results
-```
+## Limits
 
-## Tuning Parameters
+`MAX_PER_SOURCE` in `pipeline.py` is 20. The scraper asks Indian Kanoon for up to
+20 results, India Code for up to 10, and Tavily (when enabled) for up to 20.
+These are per-query caps, not the total number of documents in those archives.
 
-| Parameter        | File         | Default | What it controls                        |
-|------------------|--------------|---------|-----------------------------------------|
-| MAX_PER_SOURCE   | pipeline.py  | 5       | Docs fetched per source                 |
-| BM25_PREFILTER   | pipeline.py  | 25      | Max docs sent to LLM filter             |
-| MAX_FINAL        | pipeline.py  | 10      | Results shown to user                   |
-| EXCERPT_WORDS    | relevance_filter.py | 400 | Words sent to LLM per doc          |
-| MODEL            | relevance_filter.py | claude-haiku-4-5 | LLM model used     |
-| SCRAPE_DELAY     | legal_scraper.py | 0.8s | Polite delay between requests        |
+The old `relevance_filter.py` module remains in the project, but the main pipeline
+does not call it. Its Anthropic key is not needed to run `pipeline.py`.
