@@ -1,8 +1,10 @@
 """Retrieve Indian legal documents from public web sources."""
 
 import asyncio
+import hashlib
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote_plus, urljoin
 
 import httpx
@@ -32,8 +34,8 @@ HEADERS = {
 }
 
 FETCH_TIMEOUT  = 15     # seconds per page fetch
-MAX_WORDS      = 1200   # words kept per document
-SCRAPE_DELAY   = 1.0    # polite delay between requests to same host
+SCRAPE_DELAY   = 1.0    # polite delay before each network request
+CACHE_DIR      = Path(__file__).with_name("cache")   # saved copies of fetched pages
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,23 +47,32 @@ def _clean(text: str) -> str:
     )
     return re.sub(r"\s+", " ", text).strip()
 
-def _truncate(text: str, max_words: int = MAX_WORDS) -> str:
-    words = text.split()
-    return " ".join(words[:max_words]) + (" ..." if len(words) > max_words else "")
+def make_doc_id(prefix: str, url: str) -> str:
+    """Stable ID: the same URL always gets the same ID, across runs."""
+    return f"{prefix}_{hashlib.sha1(url.encode()).hexdigest()[:12]}"
 
 async def _fetch(url: str, client: httpx.AsyncClient,
-                 extra_headers: dict | None = None) -> str | None:
-    h = {**HEADERS, **(extra_headers or {})}
+                 use_cache: bool = True) -> str | None:
+    """GET a page, using the disk cache when possible. Returns HTML or None."""
+    cache_file = CACHE_DIR / (hashlib.sha1(url.encode()).hexdigest() + ".html")
+    if use_cache and cache_file.exists():
+        return cache_file.read_text(encoding="utf-8")
+
+    await asyncio.sleep(SCRAPE_DELAY)   # be polite: only real requests wait
     try:
-        r = await client.get(url, headers=h, timeout=FETCH_TIMEOUT,
+        r = await client.get(url, headers=HEADERS, timeout=FETCH_TIMEOUT,
                              follow_redirects=True)
-        if r.status_code != 200:
-            print(f"  [fetch] ✗ {url[:60]} → HTTP {r.status_code}")
-            return None
-        return r.text
     except httpx.HTTPError as e:
         print(f"  [fetch] ✗ {url[:60]} → {type(e).__name__}: {e!r}")
         return None
+    if r.status_code != 200:
+        print(f"  [fetch] ✗ {url[:60]} → HTTP {r.status_code}")
+        return None
+
+    if use_cache:                       # only successful pages are cached
+        CACHE_DIR.mkdir(exist_ok=True)
+        cache_file.write_text(r.text, encoding="utf-8")
+    return r.text
 
 def _parse(html: str, selector: str | None = None) -> str:
     soup = BeautifulSoup(html, "html.parser")
@@ -144,7 +155,6 @@ async def scrape_indiankanoon(
             continue
         full_url = IK_BASE + href if href.startswith("/") else href
 
-        await asyncio.sleep(SCRAPE_DELAY)
         doc_html = await _fetch(full_url, client)
         if not doc_html:
             continue
@@ -155,9 +165,9 @@ async def scrape_indiankanoon(
             continue
 
         docs.append(ScrapedDoc(
-            doc_id  = f"ik_{abs(hash(full_url))}",
+            doc_id  = make_doc_id("ik", full_url),
             title   = title,
-            content = _truncate(content),
+            content = content,                  # full judgment, not truncated
             url     = full_url,
             source  = "indiankanoon.org",
             provider = "Indian Kanoon",
@@ -235,10 +245,12 @@ async def scrape_indiacode(
             print(f"  [indiacode] incomplete search result skipped: {title[:65]}")
             continue
         full_url = urljoin(f"{IC_BASE}/", f"handle/{handle}")
+        # India Code's own UUID is already stable; fall back to the URL hash
+        ic_id = item.get("uuid") or item.get("id")
         docs.append(ScrapedDoc(
-            doc_id  = f"ic_{item.get('uuid') or item.get('id') or abs(hash(full_url))}",
+            doc_id  = f"ic_{ic_id}" if ic_id else make_doc_id("ic", full_url),
             title   = title,
-            content = _truncate(content),
+            content = content,
             url     = full_url,
             source  = "indiacode.gov.in",
             provider = "India Code",
@@ -310,9 +322,9 @@ async def scrape_tavily(
             continue
 
         docs.append(ScrapedDoc(
-            doc_id  = f"tavily_{abs(hash(page_url))}",
+            doc_id  = make_doc_id("tavily", page_url),
             title   = title,
-            content = _truncate(_clean(content)),
+            content = _clean(content),
             url     = page_url,
             source  = source,
             provider = "Tavily",

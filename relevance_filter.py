@@ -168,7 +168,8 @@ async def llm_judge(
             if relevance not in ("relevant", "partial", "not_relevant"):
                 relevance = "not_relevant"
 
-        except (httpx.HTTPStatusError, json.JSONDecodeError, KeyError) as exc:
+        # httpx.HTTPError covers both bad status codes and network errors (timeouts)
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError) as exc:
             # On any failure, default to partial so we don't silently drop docs
             relevance = "partial"
             reason = f"[filter error: {exc}]"
