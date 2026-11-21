@@ -33,15 +33,76 @@ policies; scraping every record is not guaranteed by a search-page scraper.
 ## Install and run
 
 ```powershell
-pip install -r requirements.txt
-python pipeline.py "right to privacy Article 21 India"
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python pipeline.py "right to privacy Article 21 India"
 ```
 
-Run `python pipeline.py` without a query to be prompted interactively.
+Run `.venv\Scripts\python pipeline.py` without a query to be prompted interactively.
+
+Use a standard CPython or Anaconda Python (3.10+). The MSYS2/MinGW Python
+(`C:\msys64\...\python.exe`) cannot install numpy, which `rank-bm25` needs.
+
+### Caching
+
+Pages downloaded from Indian Kanoon are saved in `cache/` (not committed).
+Running the same query again re-uses them, so results are identical and the
+site is not hit again. Delete `cache/` to download fresh copies. India Code and
+Tavily API results are not cached.
 
 The direct Indian Kanoon and India Code scrapers, and BM25 ranking, need no API
 keys. To enable Tavily results, set `TAVILY_API_KEY` in a `.env` file in the
 project folder or as an environment variable. Do not commit or share `.env`.
+
+## Building the offline corpus (Phase 1)
+
+```powershell
+.venv\Scripts\python crawl.py     # ~2.5 hours, ~540 MB in data/
+.venv\Scripts\python dedup.py     # near-duplicate removal, ~minutes
+```
+
+`crawl.py` searches Indian Kanoon for each query in `seeds.txt`, then follows
+the citations inside those judgments (most-cited first) to collect up to 5,000
+judgments and statute sections. It writes `data/corpus.jsonl` and
+`data/citations.tsv`. If it is interrupted, or stops because the network is
+down, run it again: documents already saved are skipped.
+
+`dedup.py` finds near-duplicates with shingling, MinHash and LSH, and writes
+`data/duplicates.tsv` and `data/corpus_dedup.jsonl`. See `PHASE1_CHANGES.md`.
+
+Quick test (~1 minute):
+`crawl.py --seed-limit 2 --pages-per-seed 1 --max-docs 40 --out data/test`,
+then `dedup.py data/test`.
+
+## Text processing and corpus statistics (Phase 2)
+
+```powershell
+.venv\Scripts\python text_processing.py      # demo: tokens, stopwords, stemming
+.venv\Scripts\python corpus_stats.py         # Zipf + Heaps, ~10 minutes
+.venv\Scripts\python spelling.py demo        # Hamming, LCS, Levenshtein
+.venv\Scripts\python spelling.py correct "anticipatary habeus corpas privecy"
+.venv\Scripts\python spelling.py case "putaswami"
+.venv\Scripts\python spelling.py evaluate    # accuracy on eval/misspellings.tsv
+```
+
+`corpus_stats.py` writes `analysis/zipf.png`, `analysis/heaps.png`,
+`analysis/corpus_stats.md` and `data/vocabulary.tsv`; `spelling.py` needs the
+vocabulary file. The lemmatizer needs WordNet once:
+`.venv\Scripts\python -c "import nltk; nltk.download('wordnet')"`.
+See `PHASE2_CHANGES.md`.
+
+## Index and Boolean search (Phase 3)
+
+```powershell
+.venv\Scripts\python index.py build        # ~80 s → data/index_porter.pkl
+.venv\Scripts\python boolean_search.py "anticipatory AND bail AND NOT murder"
+.venv\Scripts\python boolean_search.py '"right to privacy" AND surveillance'
+.venv\Scripts\python boolean_search.py "bail /5 437"
+.venv\Scripts\python compression.py         # → analysis/compression.md
+```
+
+See `PHASE3_CHANGES.md`. The project scope, and what was left out and why,
+is in `plan.md`.
 
 ## How it works
 

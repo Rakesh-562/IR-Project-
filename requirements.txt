@@ -3,3 +3,5 @@ beautifulsoup4==4.15.0
 rank-bm25==0.2.2
 python-dotenv==1.2.4
 numpy==2.5.4
+nltk==3.10.4
+matplotlib==3.11.2

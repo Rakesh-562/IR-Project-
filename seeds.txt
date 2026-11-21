@@ -1,5 +1,119 @@
-right to privacy
-Article 21
-freedom of speech
-posh Act 
-land reforms Act
+# Seed queries for crawl.py — one per line. Lines starting with # are ignored.
+# They cover the areas the evaluation queries (Phase 4) will be drawn from.
+
+# Constitutional rights
+right to privacy Article 21
+right to life and personal liberty
+freedom of speech and expression Article 19
+equality before law Article 14
+right to education Article 21A
+untouchability abolition Article 17
+reservation in public employment
+freedom of religion Article 25
+protection against arbitrary arrest Article 22
+writ of habeas corpus
+right to livelihood
+right to health
+right to clean environment
+judicial review basic structure
+preventive detention
+
+# Criminal law and procedure
+anticipatory bail section 438 CrPC
+regular bail section 437 CrPC
+default bail section 167 CrPC
+quashing of FIR section 482 CrPC
+murder section 302 IPC
+culpable homicide not amounting to murder
+dowry death section 304B IPC
+cruelty by husband section 498A IPC
+rape conviction evidence of prosecutrix
+sexual offences against children POCSO
+custodial death compensation
+police custody torture
+narcotics NDPS search and seizure
+cheque bounce section 138 Negotiable Instruments Act
+criminal breach of trust
+cheating section 420 IPC
+defamation criminal section 499
+sedition section 124A
+death penalty rarest of rare
+plea bargaining
+
+# Evidence
+dying declaration admissibility
+circumstantial evidence chain
+confession to police officer inadmissible
+electronic evidence section 65B certificate
+hostile witness testimony
+burden of proof presumption of innocence
+
+# Property and succession
+Hindu Succession Act daughter coparcener
+partition of joint family property
+adverse possession
+specific performance of agreement to sell
+will probate execution proof
+gift deed revocation
+tenant eviction rent control
+land acquisition compensation
+easement right of way
+benami transaction
+
+# Family law
+divorce on ground of cruelty
+maintenance of wife section 125 CrPC
+child custody welfare of child
+restitution of conjugal rights
+domestic violence protection order
+Muslim triple talaq
+adoption Hindu Adoptions and Maintenance Act
+live-in relationship rights
+
+# Labour and service law
+wrongful termination of workman
+retrenchment compensation Industrial Disputes Act
+regularisation of contract employees
+disciplinary inquiry natural justice
+pension benefits government employee
+sexual harassment at workplace
+equal pay for equal work
+gratuity payment
+
+# Administrative law and RTI
+right to information application rejected
+RTI exemption personal information section 8
+principles of natural justice audi alteram partem
+legitimate expectation
+public interest litigation locus standi
+
+# Commercial, consumer and tax
+consumer complaint deficiency in service
+medical negligence compensation
+arbitration award setting aside section 34
+insolvency resolution process IBC
+breach of contract damages
+company oppression and mismanagement
+income tax reassessment notice
+GST input tax credit
+trademark infringement passing off
+copyright infringement
+
+# Other areas
+motor accident claim compensation
+environmental pollution polluter pays
+forest rights tribal
+cyber crime Information Technology Act
+election petition corrupt practice
+juvenile justice child in conflict with law
+bonded labour rehabilitation
+right to fair trial
+speedy trial delay
+contempt of court
+transgender persons rights
+euthanasia right to die with dignity
+freedom of press
+
+# Added in commit 367f403 (not in the Phase 1 crawl yet)
+POSH Act sexual harassment of women at workplace
+land reforms Act ceiling on agricultural land
