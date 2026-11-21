@@ -104,6 +104,31 @@ See `PHASE2_CHANGES.md`.
 See `PHASE3_CHANGES.md`. The project scope, and what was left out and why,
 is in `plan.md`.
 
+## Evaluation (Phase 4)
+
+```powershell
+.venv\Scripts\python ik_baseline.py                 # Indian Kanoon's ranking as a baseline run
+.venv\Scripts\python judge.py pool eval/runs/*.txt  # pool the top 10 of each run
+#   grade eval/judgments.tsv (human_grade 0/1/2), or: judge.py llm (needs GEMINI_API_KEY)
+.venv\Scripts\python judge.py qrels
+.venv\Scripts\python evaluate.py eval/runs/*.txt --baseline ik_native
+```
+
+See `PHASE4_CHANGES.md`.
+
+## Ranking models (Phase 5)
+
+```powershell
+.venv\Scripts\python ranking.py "right to privacy Article 21" --model bm25   # tfidf | bm25 | lm_dir
+.venv\Scripts\python index.py build --method none      # extra indexes for the stemming comparison
+.venv\Scripts\python index.py build --method lemma
+.venv\Scripts\python ranking.py runs                   # → eval/runs/*.txt
+```
+
+LLM grading uses Google Gemini: put `GEMINI_API_KEY` in `.env`
+(free key: https://aistudio.google.com/apikey), then `judge.py llm`.
+See `PHASE5_CHANGES.md`.
+
 ## How it works
 
 ```text
