@@ -129,6 +129,16 @@ LLM grading uses Google Gemini: put `GEMINI_API_KEY` in `.env`
 (free key: https://aistudio.google.com/apikey), then `judge.py llm`.
 See `PHASE5_CHANGES.md`.
 
+## Citation authority with PageRank (Phase 6)
+
+```powershell
+.venv\Scripts\python pagerank.py                       # → data/pagerank.tsv, analysis/pagerank.md
+.venv\Scripts\python ranking.py "dying declaration sole basis of conviction" --pagerank 1.0
+```
+
+Adds `w · log(PageRank · N)` to each judgment's score (statutes get no
+bonus). See `PHASE6_CHANGES.md`.
+
 ## How it works
 
 ```text
