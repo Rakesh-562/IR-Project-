@@ -139,6 +139,19 @@ See `PHASE5_CHANGES.md`.
 Adds `w · log(PageRank · N)` to each judgment's score (statutes get no
 bonus). See `PHASE6_CHANGES.md`.
 
+## Query expansion and click feedback (Phase 7)
+
+```powershell
+.venv\Scripts\python feedback.py "anticipatory bail 438 crpc" --thesaurus
+.venv\Scripts\python feedback.py "dying declaration sole basis of conviction" --prf
+.venv\Scripts\python search_app.py      # search website: http://127.0.0.1:8000
+```
+
+The website learns from clicks: a result read for 30 s or more counts as
+relevant for that query, and one left within 10 s as not relevant
+(Rocchio feedback). Clicks are logged to `data/clicks.jsonl` (not
+committed). See `PHASE7_CHANGES.md`.
+
 ## How it works
 
 ```text

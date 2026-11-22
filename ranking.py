@@ -22,8 +22,10 @@ term at a time: walk down the term's posting list and add to an
        of words" model; we ask how likely it is to generate the query.
        Smoothing gives unseen terms a small probability instead of zero.
 
-Each query term counts once (repeats in the query are ignored), and the
-query goes through the same analyze() as the documents.
+The query is a set of terms with WEIGHTS: each typed term has weight 1 (repeats
+are ignored), and query expansion (Phase 7, feedback.py) adds more terms with
+smaller weights. A term's contribution is multiplied by its weight. The query
+goes through the same analyze() as the documents.
 
 Citation authority (Phase 6): any model's score can get a PageRank bonus,
        score + w · log(PageRank · N)
@@ -64,10 +66,9 @@ class Ranker:
         self._doc_norms = None                         # computed on first TF-IDF query
         self._log_pagerank = None                      # loaded on first use of the PageRank bonus
 
-    def query_terms(self, query: str) -> list[str]:
-        """Analyzed query terms that occur in the index, each once."""
-        terms = dict.fromkeys(analyze(query, self.index.method))   # unique, keeps order
-        return [t for t in terms if t in self.index.postings]
+    def query_weights(self, query: str) -> dict[str, float]:
+        """{term: 1.0} for each analyzed query term that occurs in the index."""
+        return {t: 1.0 for t in analyze(query, self.index.method) if t in self.index.postings}
 
     # ── 1. TF-IDF cosine ──────────────────────────────────────────────────────
 
@@ -81,12 +82,12 @@ class Ranker:
             self._doc_norms = [math.sqrt(s) for s in squares]
         return self._doc_norms
 
-    def tfidf(self, terms: list[str]) -> dict[int, float]:
+    def tfidf(self, weights: dict[str, float]) -> dict[int, float]:
         norms = self.doc_norms()
-        query_weights = {t: math.log(self.N / self.index.df(t)) for t in terms}   # qtf = 1
+        query_weights = {t: w * math.log(self.N / self.index.df(t)) for t, w in weights.items()}
         query_norm = math.sqrt(sum(w * w for w in query_weights.values())) or 1.0
         scores = defaultdict(float)
-        for t in terms:
+        for t in weights:
             plist = self.index.postings[t]
             wq = query_weights[t] / query_norm
             for k, doc in enumerate(plist.docs):
@@ -98,11 +99,11 @@ class Ranker:
     def bm25_idf(self, df: int) -> float:
         return math.log(1 + (self.N - df + 0.5) / (df + 0.5))
 
-    def bm25(self, terms: list[str], k1: float = K1, b: float = B) -> dict[int, float]:
+    def bm25(self, weights: dict[str, float], k1: float = K1, b: float = B) -> dict[int, float]:
         scores = defaultdict(float)
-        for t in terms:
+        for t, w in weights.items():
             plist = self.index.postings[t]
-            idf = self.bm25_idf(len(plist))
+            idf = w * self.bm25_idf(len(plist))
             for k, doc in enumerate(plist.docs):
                 tf = plist.tf(k)
                 length_norm = 1 - b + b * self.index.doc_len[doc] / self.avgdl
@@ -111,10 +112,10 @@ class Ranker:
 
     # ── 3. Query likelihood, Dirichlet smoothing ──────────────────────────────
 
-    def lm_dirichlet(self, terms: list[str], mu: float = MU) -> dict[int, float]:
+    def lm_dirichlet(self, weights: dict[str, float], mu: float = MU) -> dict[int, float]:
         # tf of each query term in each document that contains it
         tfs = {}
-        for t in terms:
+        for t in weights:
             plist = self.index.postings[t]
             tfs[t] = {doc: plist.tf(k) for k, doc in enumerate(plist.docs)}
         candidates = set().union(*tfs.values()) if tfs else set()
@@ -123,10 +124,10 @@ class Ranker:
         for doc in candidates:                        # documents with at least one query term
             dl = self.index.doc_len[doc]
             score = 0.0
-            for t in terms:
+            for t, w in weights.items():
                 p_collection = len(self.index.postings[t].positions) / self.total_terms
                 tf = tfs[t].get(doc, 0)               # 0 → smoothing still gives a small probability
-                score += math.log((tf + mu * p_collection) / (dl + mu))
+                score += w * math.log((tf + mu * p_collection) / (dl + mu))
             scores[doc] = score
         return scores
 
@@ -148,11 +149,15 @@ class Ranker:
 
     def search(self, query: str, model: str = "bm25", k: int = 10,
                pagerank_weight: float = 0.0) -> list[tuple[int, float]]:
-        """Top k (document number, score), best first; ties broken by document number."""
-        terms = self.query_terms(query)
-        if not terms:
+        """Top k (document number, score), best first, for a typed query."""
+        return self.rank(self.query_weights(query), model, k, pagerank_weight)
+
+    def rank(self, weights: dict[str, float], model: str = "bm25", k: int = 10,
+             pagerank_weight: float = 0.0) -> list[tuple[int, float]]:
+        """Top k for weighted query terms; ties broken by document number."""
+        if not weights:
             return []
-        scores = {"tfidf": self.tfidf, "bm25": self.bm25, "lm_dir": self.lm_dirichlet}[model](terms)
+        scores = {"tfidf": self.tfidf, "bm25": self.bm25, "lm_dir": self.lm_dirichlet}[model](weights)
         if pagerank_weight:
             prior = self.log_pagerank()
             scores = {doc: s + pagerank_weight * prior[doc] for doc, s in scores.items()}
