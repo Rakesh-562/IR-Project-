@@ -17,6 +17,7 @@ The judgments live in one spreadsheet-friendly file, eval/judgments.tsv:
 
 Steps:
     python judge.py pool eval/runs/*.txt   add the top documents of these runs (keeps grades already given)
+    python judge.py human [qid]            grade judgments interactively (human_grade wins over LLM)
     python judge.py llm                    fill llm_grade where it is empty
     python judge.py qrels                  write eval/qrels.txt (human grade, else LLM grade)
     python judge.py kappa                  agreement between LLM and human grades (Cohen's κ)
@@ -33,7 +34,7 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-from evaluate import load_run
+from evaluate import expand_run_paths, load_run
 from text_processing import analyze
 
 BASE_DIR        = Path(__file__).resolve().parent
@@ -116,6 +117,52 @@ def pool(run_files: list[Path]) -> None:
         })
     write_judgments(rows)
     print(f"[judge] {len(new_pairs)} new (query, document) pairs; {len(rows)} in {JUDGMENTS_FILE.name}")
+
+def human_grade(qid: str | None = None) -> None:
+    """Grade pooled documents interactively, saving each answer immediately."""
+    queries, rows = load_queries(), read_judgments()
+    todo = [r for r in rows if r["human_grade"] == "" and (qid is None or r["qid"] == qid)]
+    if not todo:
+        sys.exit(f"No ungraded judgment pairs found{f' for {qid}' if qid else ''}.")
+
+    docs = load_documents({r["doc_id"] for r in todo})
+    print("\nGrade: 2 = highly relevant, 1 = partly relevant, 0 = not relevant")
+    print("Commands: s = skip, f = show full document text, q = quit\n")
+
+    for i, row in enumerate(todo, 1):
+        query = queries[row["qid"]]
+        doc = docs.get(row["doc_id"])
+        print(f"[{i}/{len(todo)}] {row['qid']}  |  {row['doc_id']}")
+        print(f"Query: {query['query']}")
+        print(f"What counts as relevant: {query['description']}")
+        print(f"Document: {row['title']}  |  {row['court']}")
+        print(f"Passage: {row['snippet']}")
+        print(f"LLM guess: {row['llm_grade'] or 'not graded'}")
+
+        while True:
+            answer = input("Grade [0/1/2, s/f/q]: ").strip().lower()
+            if answer == "f":
+                if doc is None:
+                    print("\n[Full document text is not available in the corpus]")
+                    print("Use the snippet and title shown above to judge.\n")
+                    continue
+                print("\n" + doc["text"][:20_000])
+                if len(doc["text"]) > 20_000:
+                    print("\n[Full text truncated at 20,000 characters]")
+                print(f"Source: {doc.get('url', '')}\n")
+                continue
+            if answer == "q":
+                write_judgments(rows)
+                print(f"\n[judge] saved progress; {JUDGMENTS_FILE.name} contains the grades entered")
+                return
+            if answer == "s":
+                break
+            if answer in {"0", "1", "2"}:
+                row["human_grade"] = answer
+                write_judgments(rows)
+                break
+            print("Please enter 0, 1, 2, s, f, or q.")
+        print()
 
 def llm_grade(query: dict, doc: dict, api_key: str) -> str:
     """Ask Gemini for a 0/1/2 grade, showing it the best-matching passage."""
@@ -204,7 +251,9 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8")
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "pool" and len(sys.argv) > 2:
-        pool([Path(p) for p in sys.argv[2:]])
+        pool(expand_run_paths(sys.argv[2:]))
+    elif command == "human":
+        human_grade(sys.argv[2] if len(sys.argv) > 2 else None)
     elif command == "llm":
         llm()
     elif command == "qrels":

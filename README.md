@@ -109,7 +109,8 @@ is in `plan.md`.
 ```powershell
 .venv\Scripts\python ik_baseline.py                 # Indian Kanoon's ranking as a baseline run
 .venv\Scripts\python judge.py pool eval/runs/*.txt  # pool the top 10 of each run
-#   grade eval/judgments.tsv (human_grade 0/1/2), or: judge.py llm (needs GEMINI_API_KEY)
+.venv\Scripts\python judge.py human                 # judge interactively; use qid, e.g. judge.py human q01
+#   or grade eval/judgments.tsv directly (human_grade 0/1/2); judge.py llm uses GEMINI_API_KEY
 .venv\Scripts\python judge.py qrels
 .venv\Scripts\python evaluate.py eval/runs/*.txt --baseline ik_native
 ```

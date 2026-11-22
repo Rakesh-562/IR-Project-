@@ -11,7 +11,7 @@ Metrics (per query, then averaged over queries):
     AP       average of P@i over the ranks i where a relevant document appears,
              divided by the number of relevant documents   →  MAP = mean of AP
     RR       1 / rank of the first relevant document        →  MRR = mean of RR
-    nDCG@k   graded: DCG = Σ (2^grade − 1) / log2(rank + 1), divided by the
+    nDCG@k   graded: DCG = Σ (2^grade - 1) / log2(rank + 1), divided by the
              DCG of the ideal ordering (best grades first)
 
 Documents nobody judged count as NOT relevant (the usual pooling assumption).
@@ -28,6 +28,7 @@ Run:
 """
 
 import argparse
+import glob
 import math
 import random
 import sys
@@ -56,6 +57,20 @@ def load_run(path: Path) -> dict[str, list[str]]:
             qid, _, doc_id, rank, _score, _name = line.split()
             rows[qid].append((int(rank), doc_id))
     return {qid: [doc for _, doc in sorted(r)] for qid, r in rows.items()}
+
+def expand_run_paths(paths: list[str | Path]) -> list[Path]:
+    """Expand wildcard run-file arguments on shells that pass them literally."""
+    expanded = []
+    for path in paths:
+        pattern = str(path)
+        if glob.has_magic(pattern):
+            matches = sorted(Path(match) for match in glob.glob(pattern))
+            if not matches:
+                raise FileNotFoundError(f"No run files match pattern: {pattern}")
+            expanded.extend(matches)
+        else:
+            expanded.append(Path(path))
+    return expanded
 
 def write_run(results: dict[str, list[tuple[str, float]]], name: str, path: Path) -> None:
     """Save {qid: [(doc_id, score), …] best first} in TREC format (used by the ranking code)."""
@@ -138,14 +153,15 @@ def randomization_test(a: dict[str, float], b: dict[str, float], trials: int = 1
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate runs against eval/qrels.txt.")
-    parser.add_argument("runs", nargs="+", type=Path)
+    parser.add_argument("runs", nargs="+")
     parser.add_argument("--qrels", type=Path, default=QRELS_FILE)
     parser.add_argument("--baseline", help="run name to test the others against (MAP)")
     parser.add_argument("--per-query", action="store_true", help="also print AP per query")
     args = parser.parse_args()
 
     qrels = load_qrels(args.qrels)
-    results = {p.stem: evaluate_run(load_run(p), qrels) for p in args.runs}
+    run_paths = expand_run_paths(args.runs)
+    results = {p.stem: evaluate_run(load_run(p), qrels) for p in run_paths}
     n_queries = len(next(iter(results.values()))["MAP"])
     if n_queries == 0:
         sys.exit(f"No query has a relevant document in {args.qrels}. Grade eval/judgments.tsv, "

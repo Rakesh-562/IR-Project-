@@ -522,64 +522,64 @@ class RAGSynthesizer:
             raise RuntimeError(last_error)
         raise RuntimeError("No supported Gemini models responded successfully.")
 
-    @classmethod
-    async def _generate_anthropic(cls, prompt: str) -> str | None:
-        url = "https://api.anthropic.com/v1/messages"
-        headers = {
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "claude-haiku-4-5",
-            "system": cls.SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1500,
-            "temperature": 0.2
-        }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                return "".join(c.get("text", "") for c in data.get("content", [])).strip()
-        return None
+    # @classmethod
+    # async def _generate_anthropic(cls, prompt: str) -> str | None:
+    #     url = "https://api.anthropic.com/v1/messages"
+    #     headers = {
+    #         "x-api-key": ANTHROPIC_API_KEY,
+    #         "anthropic-version": "2023-06-01",
+    #         "Content-Type": "application/json"
+    #     }
+    #     payload = {
+    #         "model": "claude-haiku-4-5",
+    #         "system": cls.SYSTEM_PROMPT,
+    #         "messages": [{"role": "user", "content": prompt}],
+    #         "max_tokens": 1500,
+    #         "temperature": 0.2
+    #     }
+    #     async with httpx.AsyncClient(timeout=30.0) as client:
+    #         resp = await client.post(url, json=payload, headers=headers)
+    #         if resp.status_code == 200:
+    #             data = resp.json()
+    #             return "".join(c.get("text", "") for c in data.get("content", [])).strip()
+    #     return None
 
-    @classmethod
-    async def _generate_openai(cls, prompt: str) -> str | None:
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json"
-        }
-        headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
-        payload = {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": cls.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.2,
-            "max_tokens": 1500
-        }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
-        return None
+    # @classmethod
+    # async def _generate_openai(cls, prompt: str) -> str | None:
+    #     url = "https://api.openai.com/v1/chat/completions"
+    #     headers = {
+    #         "Content-Type": "application/json"
+    #     }
+    #     headers["Authorization"] = f"Bearer {OPENAI_API_KEY}"
+    #     payload = {
+    #         "model": "gpt-4o-mini",
+    #         "messages": [
+    #             {"role": "system", "content": cls.SYSTEM_PROMPT},
+    #             {"role": "user", "content": prompt}
+    #         ],
+    #         "temperature": 0.2,
+    #         "max_tokens": 1500
+    #     }
+    #     async with httpx.AsyncClient(timeout=30.0) as client:
+    #         resp = await client.post(url, json=payload, headers=headers)
+    #         if resp.status_code == 200:
+    #             data = resp.json()
+    #             return data["choices"][0]["message"]["content"].strip()
+    #     return None
 
-    @classmethod
-    async def _generate_ollama(cls, prompt: str) -> str | None:
-        url = f"{OLLAMA_HOST.rstrip('/')}/api/generate"
-        payload = {
-            "model": OLLAMA_MODEL,
-            "prompt": f"{cls.SYSTEM_PROMPT}\n\n{prompt}",
-            "stream": False
-        }
-        async with httpx.AsyncClient(timeout=40.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
-        return None
+    # @classmethod
+    # async def _generate_ollama(cls, prompt: str) -> str | None:
+    #     url = f"{OLLAMA_HOST.rstrip('/')}/api/generate"
+    #     payload = {
+    #         "model": OLLAMA_MODEL,
+    #         "prompt": f"{cls.SYSTEM_PROMPT}\n\n{prompt}",
+    #         "stream": False
+    #     }
+    #     async with httpx.AsyncClient(timeout=40.0) as client:
+    #         resp = await client.post(url, json=payload)
+    #         if resp.status_code == 200:
+    #             return resp.json().get("response", "").strip()
+    #     return None
 
     @classmethod
     def _extractive_summary(cls, query: str, passages: list[Passage], retrieval_mode: str) -> str:
