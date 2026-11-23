@@ -20,9 +20,11 @@ computer only).
 """
 
 import argparse
+import asyncio
 import html
 import json
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -30,8 +32,11 @@ from feedback import FeedbackSearch, log_click
 from index import load
 from judge import best_window
 from ranking import Ranker
+from rag import RAGPipeline, RAGResult
 
 MAX_WORDS_SHOWN = 20_000          # very long judgments are cut on the page
+RAG_TOP_DOCS = 5
+RAG_TOP_PASSAGES = 6
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -39,6 +44,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  body {{ font-family: system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 16px; line-height: 1.5; }}
  .result {{ margin: 18px 0; }} .meta {{ color: #666; font-size: 0.9em; }} .note {{ color: #555; font-size: 0.9em; }}
  input[type=text] {{ width: 70%; padding: 6px; }} .text {{ white-space: pre-wrap; }}
+ .rag-summary {{ border: 1px solid #d8d8d8; border-left: 5px solid #2f6fed; background: #f7faff;
+                 border-radius: 6px; padding: 16px; margin: 18px 0 24px; }}
+ .rag-summary h2 {{ margin-top: 0; }} .rag-summary .rag-text {{ white-space: pre-wrap; }}
 </style></head><body>{body}</body></html>"""
 
 def search_form(query: str = "", options: dict | None = None) -> str:
@@ -48,12 +56,57 @@ def search_form(query: str = "", options: dict | None = None) -> str:
     return (f'<form action="/search"><input type="text" name="q" value="{html.escape(query)}" '
             f'placeholder="e.g. anticipatory bail 438 crpc" autofocus> <button>Search</button><br>'
             + box("clicks", "learn from clicks") + box("thesaurus", "legal thesaurus")
-            + box("prf", "pseudo-relevance feedback") + "</form>")
+            + box("prf", "pseudo-relevance feedback") + box("rag", "include RAG summary") + "</form>")
+
+def format_rag_summary(result: RAGResult) -> str:
+    """Render the RAG result as a safe, concise dashboard panel."""
+    summary = html.escape(result.summary).replace("\n", "<br>")
+    return (
+        '<section class="rag-summary">'
+        '<h2>RAG-generated legal summary</h2>'
+        f'<div class="meta">Source: {html.escape(result.retrieval_mode)}'
+        f' · Embeddings: {html.escape(result.embedding_model)}'
+        f' · Synthesizer: {html.escape(result.generation_method)}</div>'
+        f'<div class="rag-text">{summary}</div>'
+        '<div class="meta">'
+        f'{len(result.top_docs)} document(s) retrieved · '
+        f'{len(result.selected_passages)} passage(s) used · '
+        f'{html.escape(result.reason)}</div>'
+        '</section>'
+    )
 
 class App:
     def __init__(self):
         print("[app] loading index ...")
         self.search = FeedbackSearch(Ranker(load("porter")))
+        self._rag_pipeline: RAGPipeline | None = None
+        self._rag_cache: dict[str, RAGResult] = {}
+        self._rag_lock = threading.Lock()
+
+    def rag_summary(self, query: str) -> RAGResult:
+        cache_key = " ".join(query.lower().split())
+        with self._rag_lock:
+            cached = self._rag_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            if self._rag_pipeline is None:
+                print("[app] loading RAG pipeline ...")
+                self._rag_pipeline = RAGPipeline()
+
+        result = asyncio.run(
+            self._rag_pipeline.run(
+                query=query,
+                force_web=False,
+                local_only=True,
+                offline=False,
+                top_k_docs=RAG_TOP_DOCS,
+                top_k_passages=RAG_TOP_PASSAGES,
+            )
+        )
+        with self._rag_lock:
+            self._rag_cache[cache_key] = result
+        return result
 
 app: App | None = None
 
@@ -78,13 +131,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def results_page(self, params: dict) -> None:
         query = params.get("q", "").strip()
-        options = {name: params.get(name) == "1" for name in ("clicks", "thesaurus", "prf")}
+        options = {name: params.get(name) == "1" for name in ("clicks", "thesaurus", "prf", "rag")}
         if not query:
             self.send_page("Legal search", "<h1>Legal search</h1>" + search_form())
             return
         fs = app.search
-        ranked, note = fs.search(query, 10, **options)
+        feedback_options = {
+            name: options[name]
+            for name in ("clicks", "thesaurus", "prf")
+        }
+        ranked, note = fs.search(query, 10, **feedback_options)
         parts = [search_form(query, options), f'<p class="note">Feedback used: {html.escape(note)}</p>']
+        if options["rag"]:
+            parts.append('<p class="note">Generating RAG summary from the local corpus...</p>')
+            try:
+                rag_result = app.rag_summary(query)
+                parts[-1] = format_rag_summary(rag_result)
+            except Exception as exc:
+                print(f"[app] RAG summary failed: {exc}")
+                parts[-1] = (
+                    '<section class="rag-summary"><h2>RAG-generated legal summary</h2>'
+                    '<p>RAG summary could not be generated. The keyword search results are still available.</p>'
+                    '</section>'
+                )
         for rank, (doc, score) in enumerate(ranked, 1):
             info = fs.store.text(fs.index.doc_ids[doc])
             words = info["text"].split()[:MAX_WORDS_SHOWN]

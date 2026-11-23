@@ -10,7 +10,7 @@ Step 2 — a variable-length code for each gap (all three from the course):
 
     Variable-byte (VB)   7 bits of the number per byte; the first bit of a
                          byte says "this is the last byte".  5 → 10000101
-    Elias γ (gamma)      length in unary, then the number in binary without
+    γ (gamma)      length in unary, then the number in binary without
                          its leading 1.                     5 → 110 01
     Golomb (parameter b) quotient (n-1)//b in unary, remainder (n-1)%b in
                          "truncated binary". b ≈ 0.69 × the average gap is

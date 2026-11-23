@@ -153,6 +153,11 @@ relevant for that query, and one left within 10 s as not relevant
 (Rocchio feedback). Clicks are logged to `data/clicks.jsonl` (not
 committed). See `PHASE7_CHANGES.md`.
 
+## RAG system
+
+The detailed RAG architecture, retrieval flow, examples, and dashboard
+integration are documented in [rag.md](rag.md).
+
 ## How it works
 
 ```text

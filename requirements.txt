@@ -5,3 +5,6 @@ python-dotenv==1.2.4
 numpy==2.5.4
 nltk==3.10.4
 matplotlib==3.11.2
+# python-dotenv==1.2.4
+# numpy==2.5.4
+sentence-transformers==2.7.0
