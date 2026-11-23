@@ -26,11 +26,12 @@ import json
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from feedback import FeedbackSearch, log_click
 from index import load
 from judge import best_window
+from spelling import SpellCorrector
 from ranking import Ranker
 from rag import RAGPipeline, RAGResult
 
@@ -79,6 +80,8 @@ class App:
     def __init__(self):
         print("[app] loading index ...")
         self.search = FeedbackSearch(Ranker(load("porter")))
+        print("[app] loading spelling vocabulary ...")
+        self.speller = SpellCorrector()
         self._rag_pipeline: RAGPipeline | None = None
         self._rag_cache: dict[str, RAGResult] = {}
         self._rag_lock = threading.Lock()
@@ -140,8 +143,22 @@ class Handler(BaseHTTPRequestHandler):
             name: options[name]
             for name in ("clicks", "thesaurus", "prf")
         }
+
+        # Spelling correction (spelling.py), unless the user asked for the query as typed
+        typed, correction = query, ""
+        if params.get("nocorrect") != "1":
+            corrected = app.speller.correct_query(query)
+            if corrected != " ".join(query.lower().split()):
+                query = corrected
+                as_typed = urlencode({"q": typed, "nocorrect": "1",
+                                      **{k: "1" for k, on in feedback_options.items() if on}})
+                correction = (f'<p>Showing results for <b>{html.escape(corrected)}</b>. '
+                              f'<a href="/search?{as_typed}">Search instead for '
+                              f'{html.escape(typed)}</a></p>')
+
         ranked, note = fs.search(query, 10, **feedback_options)
-        parts = [search_form(query, options), f'<p class="note">Feedback used: {html.escape(note)}</p>']
+        parts = [search_form(typed, options), correction,
+                 f'<p class="note">Feedback used: {html.escape(note)}</p>']
         if options["rag"]:
             parts.append('<p class="note">Generating RAG summary from the local corpus...</p>')
             try:

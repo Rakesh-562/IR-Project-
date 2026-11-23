@@ -135,13 +135,19 @@ class Ranker:
 
     def log_pagerank(self) -> list[float]:
         """
-        log(PageRank · N) for every document number. Statutes get 0 (no bonus):
-        their PageRank only says how often an Act is cited, not that it answers the query.
+        The PageRank bonus factor, max(0, log(PageRank · N)), for every document number.
+
+        - Only a BONUS, never a penalty: a judgment nobody cites gets 0, not a
+          negative score. Recent judgments haven't had time to be cited yet, and
+          77% of the judgments graded "highly relevant" are uncited in our corpus;
+          penalising them is what made the first version of this bonus hurt.
+        - Statutes get 0: their PageRank only says how often an Act is cited,
+          not that it answers the query.
         """
         if self._log_pagerank is None:
             from pagerank import load_judgment_pagerank
             pr = load_judgment_pagerank()
-            self._log_pagerank = [0.0] + [math.log(pr[d] * self.N) if d in pr else 0.0
+            self._log_pagerank = [0.0] + [max(0.0, math.log(pr[d] * self.N)) if d in pr else 0.0
                                           for d in self.index.doc_ids[1:]]
         return self._log_pagerank
 
