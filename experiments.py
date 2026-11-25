@@ -1,6 +1,6 @@
 """
 experiments.py — Phases 5–7 evaluated with the human judgments.
-
+ 
 1. Main table       every run in eval/runs/, scored two ways:
                       lenient: grade ≥ 1 counts as relevant
                       strict:  only grade 2 counts as relevant

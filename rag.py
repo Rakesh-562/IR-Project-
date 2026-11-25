@@ -899,8 +899,29 @@ class RAGSynthesizer:
         "5. Citations: every substantive statement must carry a bracketed source like [Doc 1] or "
         "[Doc 2]. Use only the Doc numbers provided.\n"
         "6. Keep quotations short (under 25 words). Close with one line noting this is an "
-        "informational summary, not legal advice."
+        "informational summary, not legal advice.\n"
+        "7. Output plain text only. Do not use Markdown headings, bullets, bold, italics, "
+        "blockquote markers, code formatting, or horizontal rules. Separate paragraphs with blank lines."
     )
+
+    @staticmethod
+    def _plain_text(summary: str) -> str:
+        """Remove Markdown presentation while keeping the summary's wording and paragraphs."""
+        summary = summary.replace("\r\n", "\n").replace("\r", "\n")
+        summary = re.sub(r"(?m)^\s*```[^\n]*$", "", summary)
+        summary = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", summary)
+        summary = re.sub(r"(?m)^\s{0,3}(?:[-*_]\s*){3,}$", "", summary)
+        summary = re.sub(r"(?m)^\s{0,3}>\s?", "", summary)
+        summary = re.sub(r"(?m)^\s*[-+*]\s+", "", summary)
+        summary = re.sub(r"(?m)^\s*\d+[.)]\s+", "", summary)
+        summary = re.sub(r"(?<!\\)\[([^\]]+)\]\((https?://[^)\s]+)\)", r"\1 (\2)", summary)
+        summary = re.sub(r"(?<!\\)`{1,3}([^`]+)`{1,3}", r"\1", summary)
+        summary = re.sub(r"(?<!\\)(\*\*|__)(\S(?:.*?\S)?)\1", r"\2", summary)
+        summary = re.sub(r"(?<!\\)(~~)(\S(?:.*?\S)?)\1", r"\2", summary)
+        summary = re.sub(r"(?<![\w\\])([*_])(\S(?:.*?\S)?)\1(?!\w)", r"\2", summary)
+        summary = re.sub(r"[ \t]+\n", "\n", summary)
+        summary = re.sub(r"\n{3,}", "\n\n", summary)
+        return summary.strip()
 
     @staticmethod
     def build_context(passages: list[Passage]) -> tuple[str, int]:
@@ -929,7 +950,7 @@ class RAGSynthesizer:
         if not cited:
             notes.append("the answer contains no [Doc n] citations — verify against the sources below")
         if notes:
-            summary += "\n\n> ⚠ Grounding check: " + "; ".join(notes) + "."
+            summary += "\n\nGrounding check: " + "; ".join(notes) + "."
         return summary
 
     @classmethod
@@ -969,7 +990,7 @@ class RAGSynthesizer:
                 print(f"[Synthesizer] Using {name}.")
                 summary = await fn(prompt)
                 if summary:
-                    return cls.check_citations(summary, n_docs), name
+                    return cls.check_citations(cls._plain_text(summary), n_docs), name
             except Exception as e:
                 print(f"[Synthesizer] {name} failed: {e}. Falling back...")
 
@@ -1152,7 +1173,7 @@ class RAGSynthesizer:
         lines.append("*(Note: this is an extractive summary. For full generative synthesis add "
                      "`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `OLLAMA_HOST` to `.env`. "
                      "Informational only — not legal advice.)*")
-        return "\n".join(lines)
+        return cls._plain_text("\n".join(lines))
 
 
 # ── Step 5: End-to-End RAG Pipeline ───────────────────────────────────────────
