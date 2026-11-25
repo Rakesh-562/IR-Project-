@@ -120,15 +120,21 @@ METRICS = {
     "nDCG@10": lambda r, g: ndcg_at(r, g, 10),
 }
 
-def evaluate_run(run: dict[str, list[str]], qrels: dict[str, dict[str, int]]) -> dict[str, dict[str, float]]:
-    """{metric: {qid: value}} over the queries that have at least one relevant document."""
+def evaluate_run(run: dict[str, list[str]], qrels: dict[str, dict[str, int]],
+                 min_grade: int = 1) -> dict[str, dict[str, float]]:
+    """
+    {metric: {qid: value}} over the queries that have at least one relevant document.
+    min_grade: the lowest grade that counts as relevant for P, R, MAP and MRR
+    (2 = only "highly relevant"). nDCG always uses the full grades.
+    """
     scores = {m: {} for m in METRICS}
     for qid, grades in qrels.items():
-        if not any(g >= 1 for g in grades.values()):
+        binary = {d: g for d, g in grades.items() if g >= min_grade}   # grades below min_grade → not relevant
+        if not binary:
             continue
         ranked = run.get(qid, [])                 # a query the run skipped scores 0
         for name, metric in METRICS.items():
-            scores[name][qid] = metric(ranked, grades)
+            scores[name][qid] = metric(ranked, grades if name.startswith("nDCG") else binary)
     return scores
 
 def mean(values) -> float:
@@ -155,36 +161,42 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate runs against eval/qrels.txt.")
     parser.add_argument("runs", nargs="+")
     parser.add_argument("--qrels", type=Path, default=QRELS_FILE)
-    parser.add_argument("--baseline", help="run name to test the others against (MAP)")
-    parser.add_argument("--per-query", action="store_true", help="also print AP per query")
+    parser.add_argument("--baseline", help="run name to test the others against")
+    parser.add_argument("--test-metric", default="MAP", choices=list(METRICS),
+                        help="metric used for the significance test and --per-query (default MAP)")
+    parser.add_argument("--min-grade", type=int, default=1, choices=[1, 2],
+                        help="lowest grade counted as relevant (2 = only highly relevant)")
+    parser.add_argument("--per-query", action="store_true", help="also print the test metric per query")
     args = parser.parse_args()
 
     qrels = load_qrels(args.qrels)
     run_paths = expand_run_paths(args.runs)
-    results = {p.stem: evaluate_run(load_run(p), qrels) for p in run_paths}
+    results = {p.stem: evaluate_run(load_run(p), qrels, args.min_grade) for p in run_paths}
     n_queries = len(next(iter(results.values()))["MAP"])
     if n_queries == 0:
         sys.exit(f"No query has a relevant document in {args.qrels}. Grade eval/judgments.tsv, "
                  "then run: python judge.py qrels")
-    print(f"{n_queries} queries with relevant documents in {args.qrels.name}\n")
+    print(f"{n_queries} queries with relevant documents (grade ≥ {args.min_grade}) "
+          f"in {args.qrels.name}\n")
 
-    print("| Run | " + " | ".join(METRICS) + (" | p (MAP vs baseline) |" if args.baseline else " |"))
+    m = args.test_metric
+    print("| Run | " + " | ".join(METRICS) + (f" | p ({m} vs baseline) |" if args.baseline else " |"))
     print("|---" * (len(METRICS) + 1 + bool(args.baseline)) + "|")
     for name, scores in results.items():
-        row = f"| {name} | " + " | ".join(f"{mean(scores[m].values()):.3f}" for m in METRICS)
+        row = f"| {name} | " + " | ".join(f"{mean(scores[x].values()):.3f}" for x in METRICS)
         if args.baseline:
             if name == args.baseline:
                 row += " | (baseline)"
             else:
-                row += f" | {randomization_test(scores['MAP'], results[args.baseline]['MAP']):.3f}"
+                row += f" | {randomization_test(scores[m], results[args.baseline][m]):.3f}"
         print(row + " |")
 
     if args.per_query:
         names = list(results)
-        print("\nAP per query:\n\n| qid | " + " | ".join(names) + " |")
+        print(f"\n{m} per query:\n\n| qid | " + " | ".join(names) + " |")
         print("|---" * (len(names) + 1) + "|")
-        for qid in sorted(results[names[0]]["MAP"]):
-            print(f"| {qid} | " + " | ".join(f"{results[n]['MAP'][qid]:.3f}" for n in names) + " |")
+        for qid in sorted(results[names[0]][m]):
+            print(f"| {qid} | " + " | ".join(f"{results[n][m][qid]:.3f}" for n in names) + " |")
 
 
 if __name__ == "__main__":

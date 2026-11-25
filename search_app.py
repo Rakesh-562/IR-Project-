@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from feedback import FeedbackSearch, log_click
 from index import load
+from doc_format import clean_body, format_document
 from judge import best_window
 from spelling import SpellCorrector
 from ranking import Ranker
@@ -44,7 +45,13 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <title>{title}</title><style>
  body {{ font-family: system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 16px; line-height: 1.5; }}
  .result {{ margin: 18px 0; }} .meta {{ color: #666; font-size: 0.9em; }} .note {{ color: #555; font-size: 0.9em; }}
- input[type=text] {{ width: 70%; padding: 6px; }} .text {{ white-space: pre-wrap; }}
+ input[type=text] {{ width: 70%; padding: 6px; }}
+ .doc p {{ margin: 0 0 0.9em; line-height: 1.65; }}
+ .doc p.best {{ border-left: 4px solid #e0b400; padding-left: 12px; background: #fffbea; }}
+ mark {{ background: #ffe873; padding: 0 1px; }}
+ .facts {{ color: #555; font-size: 0.92em; margin: 4px 0 14px; }}
+ .facts b {{ color: #222; font-weight: 600; }}
+ details {{ font-size: 0.9em; color: #555; margin-bottom: 14px; }}
  .rag-summary {{ border: 1px solid #d8d8d8; border-left: 5px solid #2f6fed; background: #f7faff;
                  border-radius: 6px; padding: 16px; margin: 18px 0 24px; }}
  .rag-summary h2 {{ margin-top: 0; }} .rag-summary .rag-text {{ white-space: pre-wrap; }}
@@ -173,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
         for rank, (doc, score) in enumerate(ranked, 1):
             info = fs.store.text(fs.index.doc_ids[doc])
-            words = info["text"].split()[:MAX_WORDS_SHOWN]
+            words = clean_body(info).split()[:MAX_WORDS_SHOWN]     # without header and PDF stamps
             snippet = best_window(" ".join(words), query, 40)
             link = f'/doc?id={quote(info["doc_id"])}&q={quote(query)}&rank={rank}'
             parts.append(
@@ -191,19 +198,35 @@ class Handler(BaseHTTPRequestHandler):
             self.send_page("Not found", "<p>Unknown document.</p>", 404)
             return
         info = fs.store.text(doc_id)
-        words = info["text"].split()
-        shown = " ".join(words[:MAX_WORDS_SHOWN])
-        cut = (f'<p class="note">Showing the first {MAX_WORDS_SHOWN:,} of {len(words):,} words.</p>'
-               if len(words) > MAX_WORDS_SHOWN else "")
+        # doc_format.py: header → fields, PDF stamps removed, paragraphs rebuilt, query words marked
+        doc = format_document(info, query, MAX_WORDS_SHOWN)
+        meta = doc["meta"]
+
+        facts = [f"<b>{html.escape(info['court'])}</b>"] + [html.escape(x) for x in [info["date"]] if x]
+        if "cited_by" in meta:
+            facts.append(f"cites {meta['cites']:,} · cited by {meta['cited_by']:,}")
+        if meta.get("Author"):
+            facts.append("Author: " + html.escape(meta["Author"]))
+        details = "".join(f"<div><b>{name}:</b> {html.escape(meta[name])}</div>"
+                          for name in ("Bench", "Equivalent citations") if meta.get(name))
+        details = f"<details><summary>Bench and citations</summary>{details}</details>" if details else ""
+
+        jump = ('<p class="note"><a href="#best">Jump to the best-matching passage ↓</a> '
+                '(query words are highlighted)</p>' if doc["best"] is not None else "")
+        cut = (f'<p class="note">Showing the first {MAX_WORDS_SHOWN:,} of {doc["total_words"]:,} words. '
+               f'<a href="{html.escape(info["url"])}" target="_blank" rel="noopener">Full text on Indian Kanoon</a></p>'
+               if doc["cut"] else "")
+        text = "".join(f'<p id="best" class="best">{p}</p>' if i == doc["best"] else f"<p>{p}</p>"
+                       for i, p in enumerate(doc["paragraphs"]))
         # Dwell time: measured in the browser, sent when the user leaves the page.
         # json.dumps makes the values safe JavaScript; "</" is escaped so the text can't end the script.
         beacon = json.dumps({"q": query, "doc": doc_id, "rank": int(params.get("rank", 0) or 0)})
         beacon = beacon.replace("</", "<\\/")
         body = (f'<p><a href="/search?q={quote(query)}&clicks=1">← back to results</a></p>'
                 f'<h2>{html.escape(info["title"])}</h2>'
-                f'<p class="meta">{html.escape(info["court"])} · {html.escape(info["date"])} · '
-                f'<a href="{html.escape(info["url"])}" target="_blank" rel="noopener">Indian Kanoon</a></p>'
-                f'{cut}<div class="text">{html.escape(shown)}</div>'
+                f'<div class="facts">{" · ".join(facts)} · '
+                f'<a href="{html.escape(info["url"])}" target="_blank" rel="noopener">Indian Kanoon</a></div>'
+                f'{details}{jump}{cut}<div class="doc">{text}</div>'
                 f"""<script>
                 const opened = Date.now(), click = {beacon};
                 window.addEventListener("pagehide", () => {{
